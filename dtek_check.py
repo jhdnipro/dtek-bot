@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Перевіряє графік ДТЕК для адреси і надсилає результат у Telegram.
+"""Версія для GitHub Actions (Linux, Selenium). Назва файла в репо: dtek_check.py
 
-Env (або файл .env поруч): TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+Env: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID  (з GitHub Secrets)
   python dtek_check.py            -> надсилає в Telegram
   python dtek_check.py --dry-run  -> лише друкує
 """
@@ -11,7 +11,6 @@ import re
 import sys
 import time
 import urllib.request
-from pathlib import Path
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -23,12 +22,8 @@ CITY = ("Дніпро", "м. Дніпро")
 STREET = ("Калинова", "вул. Калинова")
 HOUSE = ("53", "53")
 
-env = Path(__file__).with_name(".env")
-if env.exists():
-    for line in env.read_text().splitlines():
-        m = re.match(r"\s*([A-Z_]+)\s*=\s*(.*?)\s*$", line)
-        if m:
-            os.environ.setdefault(m[1], m[2])
+UP = "АБВГҐДЕЄЖЗИІЇЙКЛМНОПРСТУФХЦЧШЩЬЮЯ"
+LOW = "абвгґдеєжзиіїйклмнопрстуфхцчшщьюя"
 
 
 def pick(d, wait, field_id, text, option):
@@ -38,11 +33,17 @@ def pick(d, wait, field_id, text, option):
     for ch in text:
         el.send_keys(ch)
         time.sleep(0.08)
-    low = option.lower()
-xp = ("//div[contains(@class,'autocomplete-items')]/div"
-      "[translate(normalize-space(.),'АБВГҐДЕЄЖЗИІЇЙКЛМНОПРСТУФХЦЧШЩЬЮЯ','абвгґдеєжзиіїйклмнопрстуфхцчшщьюя')"
-      f"='{low}']")
-    opt = wait.until(EC.element_to_be_clickable((By.XPATH, xp)))
+    # текст у списку малими літерами (великі лише через CSS) -> порівнюємо без регістру
+    xp = ("//div[contains(@class,'autocomplete-items')]/div"
+          f"[translate(normalize-space(.),'{UP}','{LOW}')='{option.lower()}']")
+    try:
+        opt = wait.until(EC.element_to_be_clickable((By.XPATH, xp)))
+    except Exception:
+        print("DEBUG список:", d.execute_script(
+            "return [...document.querySelectorAll('.autocomplete-items div')]"
+            ".slice(0,8).map(e=>e.textContent.trim())"))
+        print("DEBUG сторінка:", d.page_source[:400].replace("\n", " "))
+        raise
     opt.click()
 
 
@@ -70,9 +71,10 @@ def ranges(cells):
 def scrape():
     opts = webdriver.ChromeOptions()
     opts.add_argument("--headless=new")
-    opts.add_argument("--window-size=1280,1000")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--window-size=1280,1000")
+    opts.add_argument("--lang=uk-UA")
     d = webdriver.Chrome(options=opts)
     try:
         wait = WebDriverWait(d, 20)
@@ -83,56 +85,48 @@ def scrape():
             if b.is_displayed():
                 b.click()
         pick(d, wait, "city", *CITY)
-        time.sleep(1.5)
+        time.sleep(2)
         pick(d, wait, "street", *STREET)
-        time.sleep(1.5)
+        time.sleep(2)
         pick(d, wait, "house_num", *HOUSE)
         wait.until(EC.visibility_of_element_located((By.ID, "discon-fact")))
         time.sleep(1.5)
 
         status = d.find_element(By.ID, "showCurOutage").text.strip()
-        queue = re.search(r"Черга \d+\.\d+", d.find_element(By.TAG_NAME, "body").text)
-        queue = queue.group(0) if queue else ""
+        m = re.search(r"Черга \d+\.\d+", d.find_element(By.TAG_NAME, "body").text)
+        queue = m.group(0) if m else ""
 
         days = []
-        dates = d.find_elements(By.CSS_SELECTOR, ".dates .date")
-        for i in range(len(dates)):
-            dates = d.find_elements(By.CSS_SELECTOR, ".dates .date")
-            label = " ".join(dates[i].text.split())
-            d.execute_script("arguments[0].click()", dates[i])
+        n = len(d.find_elements(By.CSS_SELECTOR, ".dates .date"))
+        for i in range(n):
+            el = d.find_elements(By.CSS_SELECTOR, ".dates .date")[i]
+            label = " ".join(el.text.split())
+            d.execute_script("arguments[0].click()", el)
             time.sleep(0.7)
             tables = d.find_elements(By.CSS_SELECTOR, ".discon-fact-table")
             t = tables[i] if len(tables) > i else tables[0]
-            cells = [td.get_attribute("class") or "" for td in t.find_elements(By.CSS_SELECTOR, "tbody td")][-24:]
+            cells = [td.get_attribute("class") or ""
+                     for td in t.find_elements(By.CSS_SELECTOR, "tbody td")][-24:]
             days.append((label, ranges(cells)))
         return queue, status, days
     finally:
         d.quit()
 
 
-def send(text):
-    req = urllib.request.Request(
-        f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}/sendMessage",
-        json.dumps({"chat_id": os.environ["TELEGRAM_CHAT_ID"], "text": text}).encode(),
-        {"Content-Type": "application/json"},
-    )
-    urllib.request.urlopen(req, timeout=30).read()
-
-
 def main():
-    try:
-        queue, status, days = scrape()
-    except Exception as e:
-        if "--dry-run" not in sys.argv:
-            send(f"❌ ДТЕК-перевірка не вдалась: {type(e).__name__}: {str(e)[:300]}")
-        raise
+    queue, status, days = scrape()
     lines = [f"⚡ ДТЕК: Дніпро, вул. Калинова, 53 ({queue})", "", status]
     for label, off in days:
         lines += ["", f"📅 {label}:", "🔌 Без світла: " + (", ".join(off) or "відключень немає")]
     msg = "\n".join(lines)
     print(msg)
     if "--dry-run" not in sys.argv:
-        send(msg)
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}/sendMessage",
+            json.dumps({"chat_id": os.environ["TELEGRAM_CHAT_ID"], "text": msg}).encode(),
+            {"Content-Type": "application/json"},
+        )
+        urllib.request.urlopen(req, timeout=30).read()
 
 
 if __name__ == "__main__":
