@@ -48,24 +48,27 @@ def pick(d, wait, field_id, text, option):
 
 
 def ranges(cells):
-    off = []
-    for h, c in enumerate(cells):
+    """24 клітинки -> рядки '🟢 00:00–04:30' / '🔴 04:30–08:30' на всю добу."""
+    on = []  # 48 піввгодинних слотів, True = світло є
+    for c in cells:
         if "non-scheduled" in c:
-            continue
-        if "first-half" in c:
-            off.append([h * 60, h * 60 + 30])
+            on += [True, True]
+        elif "first-half" in c:
+            on += [False, True]
         elif "second-half" in c:
-            off.append([h * 60 + 30, h * 60 + 60])
+            on += [True, False]
         elif "scheduled" in c:
-            off.append([h * 60, h * 60 + 60])
-    merged = []
-    for s, e in off:
-        if merged and merged[-1][1] == s:
-            merged[-1][1] = e
+            on += [False, False]
         else:
-            merged.append([s, e])
-    f = lambda m: f"{m // 60:02d}:{m % 60:02d}"
-    return [f"{f(s)}–{f(e)}" for s, e in merged]
+            on += [True, True]
+    segs = []
+    for i, v in enumerate(on):
+        if segs and segs[-1][0] == v:
+            segs[-1][2] = i + 1
+        else:
+            segs.append([v, i, i + 1])
+    f = lambda s: f"{s // 2:02d}:{'30' if s % 2 else '00'}"
+    return [f"{'🟢' if v else '🔴'} {f(s)}–{f(e)}" for v, s, e in segs]
 
 
 def scrape():
@@ -97,17 +100,25 @@ def scrape():
         queue = m.group(0) if m else ""
 
         days = []
-        n = min(1, len(d.find_elements(By.CSS_SELECTOR, ".dates .date")))  # лише сьогодні
+        n = len(d.find_elements(By.CSS_SELECTOR, ".dates .date"))
         for i in range(n):
             el = d.find_elements(By.CSS_SELECTOR, ".dates .date")[i]
             label = " ".join(el.text.split())
             d.execute_script("arguments[0].click()", el)
-            time.sleep(0.7)
-            tables = d.find_elements(By.CSS_SELECTOR, ".discon-fact-table")
-            t = tables[i] if len(tables) > i else tables[0]
-            cells = [td.get_attribute("class") or ""
-                     for td in t.find_elements(By.CSS_SELECTOR, "tbody td")][-24:]
-            days.append((label, ranges(cells)))
+            time.sleep(1.2)
+            # на сайті є лише одна таблиця; вона видима, тільки коли графік існує
+            shown = [t for t in d.find_elements(By.CSS_SELECTOR, ".discon-fact-table")
+                     if t.is_displayed()]
+            if shown:
+                cells = [td.get_attribute("class") or ""
+                         for td in shown[0].find_elements(By.CSS_SELECTOR, "tbody td")][-24:]
+                days.append((label, ranges(cells)))
+            else:
+                msg = d.execute_script(
+                    "const e=[...document.querySelectorAll('.discon-fact *')]"
+                    ".find(x=>x.children.length===0&&/Укренерго/.test(x.textContent));"
+                    "return e?e.textContent.trim():''")
+                days.append((label, ["⏳ " + (msg or "Графік ще не опублікований")]))
         return queue, status, days
     finally:
         d.quit()
@@ -116,8 +127,8 @@ def scrape():
 def main():
     queue, status, days = scrape()
     lines = [f"⚡ ДТЕК: Дніпро, вул. Калинова, 53 ({queue})", "", status]
-    for label, off in days:
-        lines += ["", f"📅 {label}:", "🔌 Без світла: " + (", ".join(off) or "відключень немає")]
+    for label, segs in days:
+        lines += ["", f"📅 {label}:"] + segs
     msg = "\n".join(lines)
     print(msg)
     if "--dry-run" not in sys.argv:
