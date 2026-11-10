@@ -38,7 +38,10 @@ def pick(d, wait, field_id, text, option):
     for ch in text:
         el.send_keys(ch)
         time.sleep(0.08)
-    xp = f"//div[contains(@class,'autocomplete-items')]/div[normalize-space(.)='{option}']"
+    low = option.lower()
+xp = ("//div[contains(@class,'autocomplete-items')]/div"
+      "[translate(normalize-space(.),'АБВГҐДЕЄЖЗИІЇЙКЛМНОПРСТУФХЦЧШЩЬЮЯ','абвгґдеєжзиіїйклмнопрстуфхцчшщьюя')"
+      f"='{low}']")
     opt = wait.until(EC.element_to_be_clickable((By.XPATH, xp)))
     opt.click()
 
