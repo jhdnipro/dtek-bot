@@ -97,7 +97,7 @@ def scrape():
         queue = m.group(0) if m else ""
 
         days = []
-        n = len(d.find_elements(By.CSS_SELECTOR, ".dates .date"))
+        n = min(1, len(d.find_elements(By.CSS_SELECTOR, ".dates .date")))  # лише сьогодні
         for i in range(n):
             el = d.find_elements(By.CSS_SELECTOR, ".dates .date")[i]
             label = " ".join(el.text.split())
