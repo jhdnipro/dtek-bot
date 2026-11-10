@@ -1,0 +1,21 @@
+name: DTEK check
+
+on:
+  schedule:
+    - cron: "0 5 * * *"   # 05:00 UTC = 07:00 за київським часом узимку (UTC+2)
+  workflow_dispatch:        # ручний запуск з вкладки Actions
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python dtek_check.py
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
